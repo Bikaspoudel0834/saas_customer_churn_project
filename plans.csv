@@ -1,9 +1,0 @@
-plan_id,plan_name,tier,monthly_price,seat_price,billing_interval,is_active
-1,Free,free,0.00,0.00,monthly,false
-2,Starter Monthly,starter,29.00,6.00,monthly,true
-3,Starter Annual,starter,24.00,5.00,annual,false
-4,Team Monthly,team,99.00,12.00,monthly,true
-5,Team Annual,team,82.00,10.00,annual,true
-6,Business Monthly,business,349.00,18.00,monthly,true
-7,Business Annual,business,290.00,15.00,annual,true
-8,Enterprise,enterprise,1200.00,22.00,monthly,true
