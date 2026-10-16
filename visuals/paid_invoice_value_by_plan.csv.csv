@@ -1,0 +1,9 @@
+"plan_name","tier","paid_billing_periods","paid_invoice_value","avg_paid_invoice_value"
+Enterprise,enterprise,4219,6267740.00,1485.60
+Business Annual,business,575,3409320.00,5929.25
+Business Monthly,business,3798,2168982.00,571.09
+Team Annual,team,595,1567080.00,2633.75
+Team Monthly,team,3584,906132.00,252.83
+Starter Annual,starter,605,676620.00,1118.38
+Starter Monthly,starter,3521,364369.00,103.48
+Free,free,3805,0.00,0.00
