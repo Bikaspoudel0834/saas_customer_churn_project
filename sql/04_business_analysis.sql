@@ -318,37 +318,41 @@ ORDER BY unresolved_failure_rate DESC;
 
 
 -- ============================================
--- BUSINESS QUESTION 7:
--- WHAT ARE THE MAIN REASONS CUSTOMERS CANCEL?
+-- BUSINESS QUESTION #7:
+-- CANCELLATION REASONS
+-- Analysis cutoff: 2025-12-31
 -- ============================================
+
+WITH valid_ended_subscriptions AS (
+    SELECT
+        cancel_reason
+    FROM subscriptions
+    WHERE started_on <= DATE '2025-12-31'
+      AND ended_on IS NOT NULL
+      AND ended_on >= started_on
+)
 
 SELECT
     cancel_reason,
     COUNT(*) AS cancelled_subscriptions,
     ROUND(
-        100.0 * COUNT(*) /
-        SUM(COUNT(*)) OVER (),
+        100.0 * COUNT(*) / SUM(COUNT(*)) OVER (),
         2
     ) AS cancellation_pct
-FROM subscriptions
-WHERE ended_on IS NOT NULL
-  AND TRIM(cancel_reason) <> ''
+FROM valid_ended_subscriptions
 GROUP BY cancel_reason
 ORDER BY cancelled_subscriptions DESC;
 
+
 -- RESULT:
--- Price is the most common cancellation reason, accounting for 596
--- ended subscriptions (27.21%).
+-- Price is the biggest cancellation reason at 27.18%.
+-- Missing features is second at 23.77%.
 --
--- Missing features is the second-largest reason at 519 cancellations (23.70%).
--- No longer needed accounts for 19.22%, while switching to another vendor
--- represents 19.00%.
+-- No longer needed and switched vendor are both around 19%.
+-- Non-payment is the smallest cancellation reason at 10.89%.
 --
--- Non-payment is the least common cancellation reason at 10.87%.
---
--- Price and missing product features together account for more than half
--- of all cancellations, suggesting that pricing strategy and product
--- capabilities are major retention opportunities.
+-- Pricing and missing product features are the two main reasons
+-- customers cancel their subscriptions.
 
 
 -- ============================================
@@ -397,42 +401,56 @@ ORDER BY ended_subscription_rate DESC;
 -- while partner and paid search appear to retain customers somewhat better.
 
 
+
+
 -- ============================================
--- BUSINESS QUESTION 9:
--- WHICH INDUSTRIES HAVE THE HIGHEST
--- ENDED-SUBSCRIPTION RATES?
+-- BUSINESS QUESTION #9:
+-- ENDED-SUBSCRIPTION RATE BY INDUSTRY
+-- Analysis cutoff: 2025-12-31
 -- ============================================
+
+WITH valid_subscriptions AS (
+    SELECT
+        s.subscription_id,
+        s.organization_id,
+        s.started_on,
+        s.ended_on
+    FROM subscriptions s
+    WHERE s.started_on <= DATE '2025-12-31'
+      AND (s.ended_on IS NULL OR s.ended_on >= s.started_on)
+)
 
 SELECT
     o.industry,
     COUNT(*) AS total_subscriptions,
     COUNT(*) FILTER (
-        WHERE s.ended_on IS NULL
-    ) AS active_subscriptions,
-    COUNT(*) FILTER (
-        WHERE s.ended_on IS NOT NULL
+        WHERE v.ended_on IS NOT NULL
     ) AS ended_subscriptions,
     ROUND(
-        100.0 * COUNT(*) FILTER (
-            WHERE s.ended_on IS NOT NULL
+        100.0 *
+        COUNT(*) FILTER (
+            WHERE v.ended_on IS NOT NULL
         ) / COUNT(*),
         2
     ) AS ended_subscription_rate
-FROM subscriptions s
+FROM valid_subscriptions v
 JOIN organizations o
-    ON s.organization_id = o.organization_id
+    ON v.organization_id = o.organization_id
 GROUP BY o.industry
 ORDER BY ended_subscription_rate DESC;
 
+
 -- RESULT:
--- Media has the highest ended-subscription rate at 59.54%.
--- Nonprofit is second at 54.34%, followed by government at 53.85%.
+-- Media has the highest ended-subscription rate at 61.18%.
+-- Nonprofit is second at 55.92%, followed by government at 54.65%
+-- and manufacturing at 54.45%.
 --
--- Finance has the lowest ended-subscription rate at 47.88%.
--- Healthcare and retail also perform relatively better than several other industries.
+-- Finance has the lowest ended-subscription rate at 50.45%.
+-- Healthcare is also relatively lower at 52.66%.
 --
--- The media segment appears to have the weakest retention profile,
--- while finance shows the strongest retention among the industries analyzed.
+-- Media customers have the weakest retention profile,
+-- so the company should study why customers in this industry leave more often.
+
 
 -- ============================================
 -- BUSINESS QUESTION 10:

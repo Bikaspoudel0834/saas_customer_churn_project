@@ -148,7 +148,9 @@ ORDER BY month_start;
 
 
 -- ============================================
--- 3. MONTHLY SUBSCRIPTION CHURN RATE
+-- ADVANCED ANALYSIS #3:
+-- MONTHLY SUBSCRIPTION CHURN RATE
+-- Analysis cutoff: 2025-12-31
 -- ============================================
 
 WITH valid_subscriptions AS (
@@ -157,72 +159,77 @@ WITH valid_subscriptions AS (
         started_on,
         ended_on
     FROM subscriptions
-    WHERE ended_on IS NULL
-       OR ended_on >= started_on
+    WHERE started_on <= DATE '2025-12-31'
+      AND (ended_on IS NULL OR ended_on >= started_on)
 ),
+
 months AS (
-    SELECT
-        GENERATE_SERIES(
-            DATE '2023-01-01',
-            DATE '2025-12-01',
-            INTERVAL '1 month'
-        )::date AS month_start
-),
-monthly_churn AS (
-    SELECT
-        m.month_start,
-        COUNT(v.subscription_id) FILTER (
-            WHERE v.started_on <= m.month_start
-              AND (
-                    v.ended_on IS NULL
-                    OR v.ended_on >= m.month_start
-                  )
-        ) AS active_at_start,
-        COUNT(v.subscription_id) FILTER (
+    SELECT GENERATE_SERIES(
+        DATE '2023-01-01',
+        DATE '2025-12-01',
+        INTERVAL '1 month'
+    )::date AS month_start
+)
+
+SELECT
+    m.month_start,
+
+    COUNT(*) FILTER (
+        WHERE v.started_on < m.month_start
+          AND (
+              v.ended_on IS NULL
+              OR v.ended_on >= m.month_start
+          )
+    ) AS active_at_month_start,
+
+    COUNT(*) FILTER (
+        WHERE v.ended_on >= m.month_start
+          AND v.ended_on < m.month_start + INTERVAL '1 month'
+    ) AS churned_subscriptions,
+
+    ROUND(
+        100.0 *
+        COUNT(*) FILTER (
             WHERE v.ended_on >= m.month_start
               AND v.ended_on < m.month_start + INTERVAL '1 month'
-        ) AS churned_subscriptions
-    FROM months m
-    CROSS JOIN valid_subscriptions v
-    GROUP BY m.month_start
-)
-SELECT
-    month_start,
-    active_at_start,
-    churned_subscriptions,
-    ROUND(
-        100.0 * churned_subscriptions /
-        NULLIF(active_at_start, 0),
+        )
+        /
+        NULLIF(
+            COUNT(*) FILTER (
+                WHERE v.started_on < m.month_start
+                  AND (
+                      v.ended_on IS NULL
+                      OR v.ended_on >= m.month_start
+                  )
+            ),
+            0
+        ),
         2
     ) AS monthly_churn_rate
-FROM monthly_churn
-ORDER BY month_start;
+
+FROM months m
+CROSS JOIN valid_subscriptions v
+GROUP BY m.month_start
+ORDER BY m.month_start;
+
 
 -- RESULT:
--- Monthly churn was relatively low during the early growth period,
--- partly because the active subscription base was still small.
+-- Monthly churn changed throughout the analysis period.
+-- Churn became higher near the end of 2025.
 --
--- Churn generally ranged between about 5% and 10% through most of 2024-2025.
+-- The churn rate increased to 9.38% in October 2025,
+-- 9.73% in November 2025,
+-- and reached its highest level of 11.63% in December 2025.
 --
--- August 2024 reached 10.22% and September 2024 reached 10.06%.
---
--- Churn increased again late in 2025:
--- October 2025: 9.36%
--- November 2025: 9.70%
--- December 2025: 11.53%
---
--- December 2025 recorded the highest monthly churn rate in the analysis period.
---
--- The increase in churn during late 2025 aligns with the slowdown observed
--- in MRR and ARR and may indicate emerging retention pressure.
---
--- January 2023 has no churn rate because there were no subscriptions
--- active at the beginning of that month.
+-- The increase in late 2025 shows that customer retention
+-- became a bigger business problem near the end of the year.
 
 
 
 -- ============================================
--- 4. SUBSCRIPTION COHORT RETENTION
+-- ADVANCED ANALYSIS #4:
+-- COHORT RETENTION
+-- Analysis cutoff: 2025-12-31
 -- ============================================
 
 WITH valid_subscriptions AS (
@@ -232,128 +239,108 @@ WITH valid_subscriptions AS (
         started_on,
         ended_on
     FROM subscriptions
-    WHERE ended_on IS NULL
-       OR ended_on >= started_on
+    WHERE started_on <= DATE '2025-12-31'
+      AND (ended_on IS NULL OR ended_on >= started_on)
 ),
-analysis_cutoff AS (
-    SELECT
-        MAX(started_on) AS cutoff_date
-    FROM valid_subscriptions
-),
+
 first_subscription AS (
     SELECT
         organization_id,
-        MIN(started_on) AS first_subscription_date
+        MIN(started_on) AS first_started_on
     FROM valid_subscriptions
     GROUP BY organization_id
 ),
-organization_retention AS (
+
+cohort_data AS (
     SELECT
         f.organization_id,
-        f.first_subscription_date,
-        DATE_TRUNC(
-            'month',
-            f.first_subscription_date
-        )::date AS cohort_month,
+        f.first_started_on,
+        DATE_TRUNC('month', f.first_started_on)::date AS cohort_month,
+
         CASE
-            WHEN f.first_subscription_date + INTERVAL '3 months'
-                 <= a.cutoff_date
-            THEN CASE
-                WHEN EXISTS (
-                    SELECT 1
-                    FROM valid_subscriptions s
-                    WHERE s.organization_id = f.organization_id
-                      AND s.started_on <=
-                          f.first_subscription_date + INTERVAL '3 months'
-                      AND (
-                          s.ended_on IS NULL
-                          OR s.ended_on >=
-                             f.first_subscription_date + INTERVAL '3 months'
-                      )
-                )
-                THEN 1 ELSE 0
-            END
-        END AS retained_3_months,
+            WHEN f.first_started_on + INTERVAL '3 months' <= DATE '2025-12-31'
+            THEN CASE WHEN EXISTS (
+                SELECT 1
+                FROM valid_subscriptions v
+                WHERE v.organization_id = f.organization_id
+                  AND v.started_on <= f.first_started_on + INTERVAL '3 months'
+                  AND (
+                      v.ended_on IS NULL
+                      OR v.ended_on >= f.first_started_on + INTERVAL '3 months'
+                  )
+            ) THEN 1 ELSE 0 END
+        END AS retained_3m,
+
         CASE
-            WHEN f.first_subscription_date + INTERVAL '6 months'
-                 <= a.cutoff_date
-            THEN CASE
-                WHEN EXISTS (
-                    SELECT 1
-                    FROM valid_subscriptions s
-                    WHERE s.organization_id = f.organization_id
-                      AND s.started_on <=
-                          f.first_subscription_date + INTERVAL '6 months'
-                      AND (
-                          s.ended_on IS NULL
-                          OR s.ended_on >=
-                             f.first_subscription_date + INTERVAL '6 months'
-                      )
-                )
-                THEN 1 ELSE 0
-            END
-        END AS retained_6_months,
+            WHEN f.first_started_on + INTERVAL '6 months' <= DATE '2025-12-31'
+            THEN CASE WHEN EXISTS (
+                SELECT 1
+                FROM valid_subscriptions v
+                WHERE v.organization_id = f.organization_id
+                  AND v.started_on <= f.first_started_on + INTERVAL '6 months'
+                  AND (
+                      v.ended_on IS NULL
+                      OR v.ended_on >= f.first_started_on + INTERVAL '6 months'
+                  )
+            ) THEN 1 ELSE 0 END
+        END AS retained_6m,
+
         CASE
-            WHEN f.first_subscription_date + INTERVAL '12 months'
-                 <= a.cutoff_date
-            THEN CASE
-                WHEN EXISTS (
-                    SELECT 1
-                    FROM valid_subscriptions s
-                    WHERE s.organization_id = f.organization_id
-                      AND s.started_on <=
-                          f.first_subscription_date + INTERVAL '12 months'
-                      AND (
-                          s.ended_on IS NULL
-                          OR s.ended_on >=
-                             f.first_subscription_date + INTERVAL '12 months'
-                      )
-                )
-                THEN 1 ELSE 0
-            END
-        END AS retained_12_months
+            WHEN f.first_started_on + INTERVAL '12 months' <= DATE '2025-12-31'
+            THEN CASE WHEN EXISTS (
+                SELECT 1
+                FROM valid_subscriptions v
+                WHERE v.organization_id = f.organization_id
+                  AND v.started_on <= f.first_started_on + INTERVAL '12 months'
+                  AND (
+                      v.ended_on IS NULL
+                      OR v.ended_on >= f.first_started_on + INTERVAL '12 months'
+                  )
+            ) THEN 1 ELSE 0 END
+        END AS retained_12m
+
     FROM first_subscription f
-    CROSS JOIN analysis_cutoff a
 )
+
 SELECT
     cohort_month,
     COUNT(*) AS cohort_size,
+
     ROUND(
-        100.0 * SUM(retained_3_months) /
-        NULLIF(COUNT(retained_3_months), 0),
+        100.0 * SUM(retained_3m) / NULLIF(COUNT(retained_3m), 0),
         2
     ) AS retention_3_month_pct,
+
     ROUND(
-        100.0 * SUM(retained_6_months) /
-        NULLIF(COUNT(retained_6_months), 0),
+        100.0 * SUM(retained_6m) / NULLIF(COUNT(retained_6m), 0),
         2
     ) AS retention_6_month_pct,
+
     ROUND(
-        100.0 * SUM(retained_12_months) /
-        NULLIF(COUNT(retained_12_months), 0),
+        100.0 * SUM(retained_12m) / NULLIF(COUNT(retained_12m), 0),
         2
     ) AS retention_12_month_pct
-FROM organization_retention
+
+FROM cohort_data
 GROUP BY cohort_month
 ORDER BY cohort_month;
 
+
 -- RESULT:
--- Early cohorts generally show strong 3-month retention, often above 80%.
+-- Retention changes across different customer signup cohorts.
+-- Earlier cohorts can be compared at 3, 6, and 12 months,
+-- while newer cohorts do not yet have enough time for longer retention periods.
 --
--- Retention typically declines by the 6-month and 12-month horizons,
--- showing that customer loss becomes more meaningful over longer periods.
+-- Some cohorts kept a high percentage of customers after 3 months,
+-- while 6-month and 12-month retention was more mixed.
 --
--- Several 2024 cohorts retain roughly 65%-76% of organizations at 12 months,
--- while some earlier 2023 cohorts fall closer to 30%-55%.
+-- The final analysis stops at December 2025,
+-- so future 2026 subscriptions are not included.
 --
--- Newer cohorts correctly show NULL values for retention horizons that
--- have not yet been reached, preventing immature cohorts from being
--- incorrectly reported as 100% retained.
---
--- Because organizations can later start another subscription,
--- retention at a later horizon can occasionally exceed an earlier horizon.
--- This analysis therefore measures whether an organization is active
--- at each milestone rather than uninterrupted subscription survival.
+-- The company should compare strong and weak cohorts
+-- to understand what helps customers stay longer.
+
+
 
 
 -- ============================================
@@ -467,222 +454,159 @@ ORDER BY monthly_revenue_at_risk DESC;
 -- with ended subscriptions, not necessarily realized accounting losses.
 
 
+
 -- ============================================
--- 7. HIGH-VALUE CHURN SEGMENTS
+-- ADVANCED ANALYSIS #7:
+-- HIGH-VALUE CHURN SEGMENTS
+-- Analysis cutoff: 2025-12-31
 -- ============================================
 
-WITH subscription_value AS (
+WITH valid_subscriptions AS (
     SELECT
         s.subscription_id,
         s.organization_id,
+        s.plan_id,
+        s.started_on,
         s.ended_on,
-        o.industry,
-        o.employee_band,
-        CASE
-            WHEN TRIM(o.acquisition_channel) = '' THEN 'unknown'
-            ELSE o.acquisition_channel
-        END AS acquisition_channel,
-        (
-            p.monthly_price +
-            (p.seat_price * s.seats)
-        ) AS subscription_mrr
+        s.seats,
+        (p.monthly_price + (p.seat_price * s.seats)) AS subscription_mrr
     FROM subscriptions s
-    JOIN organizations o
-        ON s.organization_id = o.organization_id
     JOIN plans p
         ON s.plan_id = p.plan_id
-
-    WHERE s.ended_on IS NULL
-       OR s.ended_on >= s.started_on
+    WHERE s.started_on <= DATE '2025-12-31'
+      AND (s.ended_on IS NULL OR s.ended_on >= s.started_on)
 )
+
 SELECT
-    industry,
-    acquisition_channel,
-    employee_band,
+    o.industry,
+    COALESCE(NULLIF(TRIM(o.acquisition_channel), ''), 'unknown')
+        AS acquisition_channel,
+    o.employee_band,
+
     COUNT(*) AS total_subscriptions,
+
     COUNT(*) FILTER (
-        WHERE ended_on IS NOT NULL
+        WHERE v.ended_on IS NOT NULL
     ) AS ended_subscriptions,
+
     ROUND(
-        100.0 * COUNT(*) FILTER (
-            WHERE ended_on IS NOT NULL
-        ) / COUNT(*),
+        100.0 *
+        COUNT(*) FILTER (WHERE v.ended_on IS NOT NULL)
+        / COUNT(*),
         2
     ) AS ended_subscription_rate,
+
+    ROUND(SUM(v.subscription_mrr), 2) AS total_mrr,
+
     ROUND(
-        SUM(subscription_mrr),
-        2
-    ) AS total_mrr,
-    ROUND(
-        SUM(subscription_mrr) FILTER (
-            WHERE ended_on IS NOT NULL
+        SUM(v.subscription_mrr) FILTER (
+            WHERE v.ended_on IS NOT NULL
         ),
         2
     ) AS churned_mrr
-FROM subscription_value
+
+FROM valid_subscriptions v
+JOIN organizations o
+    ON v.organization_id = o.organization_id
+
 GROUP BY
-    industry,
-    acquisition_channel,
-    employee_band
+    o.industry,
+    COALESCE(NULLIF(TRIM(o.acquisition_channel), ''), 'unknown'),
+    o.employee_band
+
 HAVING COUNT(*) >= 20
+
 ORDER BY churned_mrr DESC
 LIMIT 15;
 
+
 -- RESULT:
--- High-value churn exposure is concentrated heavily in software-related segments.
---
 -- Software / Organic / 11-50 employees has the highest churned MRR
 -- at approximately $22,648.
 --
--- Software / Organic / 1-10 employees follows at approximately $16,544,
--- while Software / Paid Search / 11-50 employees contributes about $15,873
--- in churned MRR.
+-- Software customer segments appear several times among the
+-- highest-value churn groups.
 --
--- Manufacturing / Organic / 11-50 employees has the highest
--- ended-subscription rate among the top-risk segments at 65.71%.
+-- Manufacturing / Organic / 11-50 employees has a high
+-- ended-subscription rate of 65.71%.
 --
--- These results suggest that retention efforts should not focus only on
--- overall churn rate. Management should prioritize customer segments that
--- combine high recurring value with high subscription-ending rates.
+-- The company should focus retention efforts on customer groups
+-- that combine high recurring revenue with high churn risk.
 
 
 -- ============================================
--- 8. PRODUCT USAGE VS RETENTION
+-- ADVANCED ANALYSIS #8:
+-- PRODUCT USAGE VS RETENTION
+-- Analysis cutoff: 2025-12-31
 -- ============================================
 
-WITH valid_usage AS (
+WITH valid_subscriptions AS (
+    SELECT
+        organization_id,
+        started_on,
+        ended_on
+    FROM subscriptions
+    WHERE started_on <= DATE '2025-12-31'
+      AND (ended_on IS NULL OR ended_on >= started_on)
+),
+organization_status AS (
+    SELECT
+        organization_id,
+        CASE
+            WHEN COUNT(*) FILTER (
+                WHERE ended_on IS NULL
+                   OR ended_on > DATE '2025-12-31'
+            ) > 0
+            THEN 'active'
+            ELSE 'ended_only'
+        END AS retention_status
+    FROM valid_subscriptions
+    GROUP BY organization_id
+),
+valid_usage AS (
     SELECT
         ue.organization_id,
-        ue.event_id,
-        ue.quantity
+        COUNT(*) AS usage_events,
+        SUM(ue.quantity) AS usage_quantity
     FROM usage_events ue
     JOIN organizations o
         ON ue.organization_id = o.organization_id
     LEFT JOIN users u
         ON ue.user_id = u.user_id
-    WHERE ue.occurred_at::date >= o.signed_up_on
+    WHERE ue.occurred_at < DATE '2026-01-01'
+      AND ue.occurred_at::date >= o.signed_up_on
       AND (
             ue.user_id IS NULL
             OR ue.occurred_at::date >= u.joined_on
           )
-),
-organization_usage AS (
-    SELECT
-        organization_id,
-        COUNT(*) AS valid_usage_events,
-        SUM(quantity) AS total_usage_quantity
-    FROM valid_usage
-    GROUP BY organization_id
-),
-organization_status AS (
-    SELECT
-        o.organization_id,
-        CASE
-            WHEN COUNT(*) FILTER (
-                WHERE s.ended_on IS NULL
-            ) > 0
-            THEN 'active'
-            ELSE 'ended_only'
-        END AS retention_status
-    FROM organizations o
-    JOIN subscriptions s
-        ON o.organization_id = s.organization_id
-    WHERE s.ended_on IS NULL
-       OR s.ended_on >= s.started_on
-    GROUP BY o.organization_id
+    GROUP BY ue.organization_id
 )
 SELECT
     os.retention_status,
     COUNT(*) AS organizations,
-    ROUND(
-        AVG(COALESCE(ou.valid_usage_events, 0)),
-        2
-    ) AS avg_usage_events_per_org,
-    ROUND(
-        AVG(COALESCE(ou.total_usage_quantity, 0)),
-        2
-    ) AS avg_usage_quantity_per_org
+    ROUND(AVG(COALESCE(vu.usage_events, 0)), 2) AS avg_valid_usage_events,
+    ROUND(AVG(COALESCE(vu.usage_quantity, 0)), 2) AS avg_valid_usage_quantity
 FROM organization_status os
-LEFT JOIN organization_usage ou
-    ON os.organization_id = ou.organization_id
+LEFT JOIN valid_usage vu
+    ON os.organization_id = vu.organization_id
 GROUP BY os.retention_status
-ORDER BY retention_status;
+ORDER BY os.retention_status;
+
 
 -- RESULT:
--- Organizations with active subscriptions average 16.05 valid usage events
--- and 66.73 units of usage quantity per organization.
+-- Active organizations had about 17.33 average valid usage events
+-- and about 72.09 average usage quantity.
 --
--- Organizations with only ended subscriptions average 19.54 valid usage events
--- and 81.28 units of usage quantity per organization.
+-- Organizations with only ended subscriptions had about 18.44
+-- average valid usage events and about 76.64 average usage quantity.
 --
--- In this dataset, ended-only organizations show higher historical product usage
--- than organizations that still have an active subscription.
+-- Ended customers had slightly higher historical usage than active customers.
+-- This does not mean that higher usage causes churn.
 --
--- Higher usage therefore does not appear to guarantee stronger retention.
--- However, this comparison should not be interpreted as causal because
--- ended organizations may have had more time to accumulate historical usage.
+-- Customer lifetime may affect these numbers because ended customers
+-- may have had more time to use the product.
 --
--- A tenure-adjusted usage analysis would be needed before concluding that
--- usage intensity increases or decreases churn risk.
+-- Product usage should be studied together with customer lifetime,
+-- pricing, plan type, and cancellation reasons.
 
-
-
--- ============================================
--- ADVANCED RETENTION ANALYSIS SUMMARY
--- ============================================
-
--- Monthly Recurring Revenue (MRR) grew from $237 in January 2023
--- to a peak of approximately $887,800 in November 2025.
---
--- Annual Recurring Revenue (ARR) reached an annualized peak
--- of approximately $10.65M in November 2025.
---
--- Both MRR and ARR declined slightly in December 2025,
--- suggesting that late-2025 retention trends should be monitored.
---
--- Monthly subscription churn generally ranged between about 5% and 10%
--- during most of the mature analysis period.
--- December 2025 recorded the highest churn rate at 11.53%.
---
--- Cohort analysis shows that retention generally weakens as customers
--- progress from 3-month to 6-month and 12-month milestones.
--- More recent cohorts were excluded from retention horizons they had
--- not yet reached.
---
--- Subscription lifetime varies moderately across plans.
--- Team Annual has the longest average lifetime at approximately 143.97 days,
--- while Starter Annual has the shortest at approximately 124.91 days.
---
--- Enterprise subscriptions create the greatest recurring-revenue exposure
--- when they end, representing approximately $425,456 in monthly recurring
--- revenue and $5.11M on an annualized basis.
---
--- Business Monthly and Business Annual also represent substantial
--- recurring-revenue exposure from ended subscriptions.
---
--- High-value churn risk is concentrated in several software customer segments,
--- especially organizations acquired organically or through paid search.
---
--- Software / Organic / 11-50 employees has the highest churned MRR
--- among the analyzed customer segments at approximately $22,648.
---
--- Manufacturing / Organic / 11-50 employees shows especially high retention
--- risk, with an ended-subscription rate of 65.71%.
---
--- Timeline-valid product usage does not show a simple positive relationship
--- with retention. Organizations with only ended subscriptions actually show
--- higher average historical usage than currently active organizations.
---
--- This indicates that churn cannot be explained by usage volume alone.
--- Pricing, missing features, customer segment, acquisition source,
--- product fit, and customer lifecycle should all be considered together.
---
--- Overall, management should prioritize:
--- 1. Protecting Enterprise and Business recurring revenue.
--- 2. Addressing late-2025 increases in churn.
--- 3. Improving pricing and product capabilities, the two leading
---    cancellation drivers identified earlier.
--- 4. Targeting high-value customer segments with elevated churn exposure.
--- 5. Using tenure-adjusted product engagement metrics before making
---    retention decisions based on usage alone.
 
